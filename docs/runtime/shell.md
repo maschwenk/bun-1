@@ -284,13 +284,11 @@ We instead recommend sticking to the `$(...)` syntax.
 
 {% /callout %}
 
-## Background execution (`&`)
+## Deferred execution and background tasks
 
-Bun Shell supports running commands in the background using the `&` operator, similar to bash. Background commands execute asynchronously without blocking the rest of your script.
+### Shell commands don't execute immediately
 
-### Important: Shell commands don't execute immediately
-
-Shell commands created with the `$` template literal do not execute immediately. They only begin execution when you call `await` or `.then()` on them:
+An important characteristic of Bun Shell is that commands created with the `$` template literal do not execute immediately. They only begin execution when you call `await` or `.then()` on them:
 
 ```js
 import { $ } from "bun";
@@ -302,80 +300,92 @@ const command = $`echo "Hello World!"`;
 await command; // NOW it executes and prints: Hello World!
 ```
 
-This deferred execution is what enables background command composition and allows you to chain methods like `.quiet()`, `.env()`, and `.cwd()` before execution.
+This deferred execution is what enables command composition and allows you to chain methods like `.quiet()`, `.env()`, and `.cwd()` before execution.
 
-### Running commands in the background
+### Running commands in the background with `.then()`
 
-Use the `&` operator to run a command in the background:
+To run a command in the background without blocking your script, call `.then()` on it instead of `await`:
 
 ```js
 import { $ } from "bun";
 
-// Start a long-running task in the background
-await $`sleep 5 & echo "This runs immediately"`;
-// Prints: This runs immediately
-// (The sleep continues running in the background)
+// Start a command in the background - don't wait for it
+$`long-running-process`.then(() => {
+  console.log("Background task completed");
+});
+
+// This runs immediately without waiting for the above command
+await $`echo "This runs right away"`;
 ```
 
-When you use `&`, the command starts executing but doesn't block the script from continuing. The shell moves to the next command immediately.
+When you use `.then()`, the command starts executing immediately, but your script continues without waiting for it to finish.
 
-### Waiting for background commands
+### Use case: Non-blocking telemetry
 
-The promise returned by the `$` function only resolves when **all** commands complete, including background commands:
+A common use case for background execution is sending telemetry or logging data that shouldn't block the main execution flow:
 
 ```js
 import { $ } from "bun";
 
-const start = Date.now();
+// Send telemetry in the background
+$`curl -X POST https://analytics.example.com/event \
+  -d '{"event": "build_started"}'`.quiet().then(() => {
+  // Telemetry sent, but we don't care about waiting for it
+});
 
-// Both commands start, but sleep runs in background
-await $`sleep 2 & echo "Started background task"`;
+// Continue with the main task immediately
+await $`bun build ./src/index.ts --outdir ./dist`;
 
-const elapsed = Date.now() - start;
-console.log(`Total time: ${elapsed}ms`); // ~2000ms
-// The await waits for the background sleep to complete!
+// Send completion telemetry (also in background)
+$`curl -X POST https://analytics.example.com/event \
+  -d '{"event": "build_completed"}'`.quiet().then(() => {});
 ```
 
-### Multiple background commands
+### Difference between `await` and `.then()`
 
-You can run multiple commands in the background:
+- **`await`**: Blocks execution until the command completes. Use this when you need the result or when subsequent commands depend on this one finishing.
+
+  ```js
+  const output = await $`git rev-parse HEAD`.text();
+  console.log(output); // Waits for the command to finish
+  ```
+
+- **`.then()`**: Starts the command but doesn't wait. Use this for fire-and-forget operations that can happen in the background.
+
+  ```js
+  $`git fetch origin`.then(() => {
+    console.log("Fetch completed in background");
+  });
+  // Continues immediately without waiting
+  ```
+
+### Handling background task results
+
+You can still access the results of background tasks in the `.then()` callback:
 
 ```js
 import { $ } from "bun";
 
-await $`
-  sleep 3 &
-  sleep 2 &
-  sleep 1 &
-  echo "All tasks started"
-`;
-// The await waits for all three sleep commands to finish (takes ~3 seconds total)
+$`echo "Background task"`.text().then((output) => {
+  console.log("Background output:", output);
+});
+
+await $`echo "Main task"`;
+// Output order may vary since background task runs concurrently
 ```
 
-### Background commands with pipes and redirection
+### Error handling in background tasks
 
-Background commands can use pipes and redirection:
-
-```js
-import { $ } from "bun";
-
-// Run a background task that processes data and saves to a file
-await $`curl https://example.com | grep "foo" > results.txt &`;
-
-// You can continue with other work
-await $`echo "Download started in background"`;
-```
-
-### Exit codes with background commands
-
-The exit code of the overall command is the exit code of the last foreground command. Background command failures can be detected through stderr or by checking output files:
+Background tasks should handle their own errors to prevent unhandled promise rejections:
 
 ```js
 import { $ } from "bun";
 
-// If the background command fails, the main command may still succeed
-const { exitCode } = await $`false & true`.nothrow();
-console.log(exitCode); // 0 (because `true` was the last foreground command)
+$`command-that-might-fail`.nothrow().then(({ exitCode, stderr }) => {
+  if (exitCode !== 0) {
+    console.error("Background task failed:", stderr.toString());
+  }
+});
 ```
 
 ## Environment variables
