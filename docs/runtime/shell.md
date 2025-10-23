@@ -284,6 +284,100 @@ We instead recommend sticking to the `$(...)` syntax.
 
 {% /callout %}
 
+## Background execution (`&`)
+
+Bun Shell supports running commands in the background using the `&` operator, similar to bash. Background commands execute asynchronously without blocking the rest of your script.
+
+### Important: Shell commands don't execute immediately
+
+Shell commands created with the `$` template literal do not execute immediately. They only begin execution when you call `await` or `.then()` on them:
+
+```js
+import { $ } from "bun";
+
+// This does NOT execute yet - it just creates a shell command
+const command = $`echo "Hello World!"`;
+
+// The command executes when you await it
+await command; // NOW it executes and prints: Hello World!
+```
+
+This deferred execution is what enables background command composition and allows you to chain methods like `.quiet()`, `.env()`, and `.cwd()` before execution.
+
+### Running commands in the background
+
+Use the `&` operator to run a command in the background:
+
+```js
+import { $ } from "bun";
+
+// Start a long-running task in the background
+await $`sleep 5 & echo "This runs immediately"`;
+// Prints: This runs immediately
+// (The sleep continues running in the background)
+```
+
+When you use `&`, the command starts executing but doesn't block the script from continuing. The shell moves to the next command immediately.
+
+### Waiting for background commands
+
+The promise returned by the `$` function only resolves when **all** commands complete, including background commands:
+
+```js
+import { $ } from "bun";
+
+const start = Date.now();
+
+// Both commands start, but sleep runs in background
+await $`sleep 2 & echo "Started background task"`;
+
+const elapsed = Date.now() - start;
+console.log(`Total time: ${elapsed}ms`); // ~2000ms
+// The await waits for the background sleep to complete!
+```
+
+### Multiple background commands
+
+You can run multiple commands in the background:
+
+```js
+import { $ } from "bun";
+
+await $`
+  sleep 3 &
+  sleep 2 &
+  sleep 1 &
+  echo "All tasks started"
+`;
+// The await waits for all three sleep commands to finish (takes ~3 seconds total)
+```
+
+### Background commands with pipes and redirection
+
+Background commands can use pipes and redirection:
+
+```js
+import { $ } from "bun";
+
+// Run a background task that processes data and saves to a file
+await $`curl https://example.com | grep "foo" > results.txt &`;
+
+// You can continue with other work
+await $`echo "Download started in background"`;
+```
+
+### Exit codes with background commands
+
+The exit code of the overall command is the exit code of the last foreground command. Background command failures can be detected through stderr or by checking output files:
+
+```js
+import { $ } from "bun";
+
+// If the background command fails, the main command may still succeed
+const { exitCode } = await $`false & true`.nothrow();
+console.log(exitCode); // 0 (because `true` was the last foreground command)
+```
+
 ## Environment variables
 
 Environment variables can be set like in bash:
