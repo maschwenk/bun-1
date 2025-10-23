@@ -284,6 +284,110 @@ We instead recommend sticking to the `$(...)` syntax.
 
 {% /callout %}
 
+## Deferred execution and background tasks
+
+### Shell commands don't execute immediately
+
+An important characteristic of Bun Shell is that commands created with the `$` template literal do not execute immediately. They only begin execution when you call `await` or `.then()` on them:
+
+```js
+import { $ } from "bun";
+
+// This does NOT execute yet - it just creates a shell command
+const command = $`echo "Hello World!"`;
+
+// The command executes when you await it
+await command; // NOW it executes and prints: Hello World!
+```
+
+This deferred execution is what enables command composition and allows you to chain methods like `.quiet()`, `.env()`, and `.cwd()` before execution.
+
+### Running commands in the background with `.then()`
+
+To run a command in the background without blocking your script, call `.then()` on it instead of `await`:
+
+```js
+import { $ } from "bun";
+
+// Start a command in the background - don't wait for it
+$`long-running-process`.then(() => {
+  console.log("Background task completed");
+});
+
+// This runs immediately without waiting for the above command
+await $`echo "This runs right away"`;
+```
+
+When you use `.then()`, the command starts executing immediately, but your script continues without waiting for it to finish.
+
+### Use case: Non-blocking telemetry
+
+A common use case for background execution is sending telemetry or logging data that shouldn't block the main execution flow:
+
+```js
+import { $ } from "bun";
+
+// Send telemetry in the background
+$`curl -X POST https://analytics.example.com/event \
+  -d '{"event": "build_started"}'`.quiet().then(() => {
+  // Telemetry sent, but we don't care about waiting for it
+});
+
+// Continue with the main task immediately
+await $`bun build ./src/index.ts --outdir ./dist`;
+
+// Send completion telemetry (also in background)
+$`curl -X POST https://analytics.example.com/event \
+  -d '{"event": "build_completed"}'`.quiet().then(() => {});
+```
+
+### Difference between `await` and `.then()`
+
+- **`await`**: Blocks execution until the command completes. Use this when you need the result or when subsequent commands depend on this one finishing.
+
+  ```js
+  const output = await $`git rev-parse HEAD`.text();
+  console.log(output); // Waits for the command to finish
+  ```
+
+- **`.then()`**: Starts the command but doesn't wait. Use this for fire-and-forget operations that can happen in the background.
+
+  ```js
+  $`git fetch origin`.then(() => {
+    console.log("Fetch completed in background");
+  });
+  // Continues immediately without waiting
+  ```
+
+### Handling background task results
+
+You can still access the results of background tasks in the `.then()` callback:
+
+```js
+import { $ } from "bun";
+
+$`echo "Background task"`.text().then((output) => {
+  console.log("Background output:", output);
+});
+
+await $`echo "Main task"`;
+// Output order may vary since background task runs concurrently
+```
+
+### Error handling in background tasks
+
+Background tasks should handle their own errors to prevent unhandled promise rejections:
+
+```js
+import { $ } from "bun";
+
+$`command-that-might-fail`.nothrow().then(({ exitCode, stderr }) => {
+  if (exitCode !== 0) {
+    console.error("Background task failed:", stderr.toString());
+  }
+});
+```
+
 ## Environment variables
 
 Environment variables can be set like in bash:
